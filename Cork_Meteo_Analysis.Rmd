@@ -1,0 +1,605 @@
+---
+title: "Cork's Meteorological Analysis"
+author: "Duc Le"
+output: html_document
+---
+
+### 1. Data Screening 
+Firstly, load the dataset
+```{r}
+df <- read.csv('Assignment 2.csv')
+head(df)
+```
+
+For the column `cbwd`, i.e. combined wind directions , there are 4 levels including
+
+- cv --> changed to SW: South West
+- NE: North East
+- NW: North West 
+- SE: South East
+
+
+```{r}
+# changing levels of combined wind directions 
+levels(df$cbwd)[1] <- 'SW'
+```
+
+
+Creating the dummy variables for `cbwd` column
+
+```{r message=FALSE, warning=FALSE}
+# install.packages('fastDummies)
+library(fastDummies)
+```
+
+```{r message=FALSE, warning=FALSE}
+# create dummy variables
+df <- dummy_cols(df)
+# removing the cbwd column
+df <- df[,-10]
+# change names of wind directions
+names(df)[names(df) == 'cbwd_SW'] <-  'SW'
+names(df)[names(df) == 'cbwd_NE'] <-  'NE'
+names(df)[names(df) == 'cbwd_NW'] <-  'NW'
+names(df)[names(df) == 'cbwd_SE'] <-  'SE'
+```
+
+```{r}
+head(df)
+```
+
+
+
+
+
+
+To deal with the missing value, the package `mice` is used 
+
+```{r message=FALSE, warning=FALSE}
+# install.packages('mice')
+library(mice)
+```
+
+According to the missing-value matrix is shown below, there are 2067 missing values in the column `pm2.5`. Those missing values are imputed in the next step
+
+```{r echo = T, results = 'hide'}
+md.pattern(df)
+```
+
+
+```{r echo=T, message=FALSE, warning=FALSE, results='hide'}
+# Imputing the missing values. This takes some time to run
+impute <- mice(df, seed = 696, m = 1)
+# Completing the dataset with the filled new values from the imputing process
+df <- complete(impute)
+```
+
+Adding `date` and `date_time` columns into the dataset by using columns `year`, `month`, `day` & `hour`
+
+```{r message=FALSE, warning=FALSE}
+# install.packages('lubridate')
+library(lubridate)
+```
+
+```{r}
+df$date <- make_date(df$year, df$month, df$day)
+df$date_time <- make_datetime(df$year, df$month, df$day, df$hour)
+```
+
+The final version of the dataset
+
+```{r}
+head(df)
+```
+
+
+### 2. Regression Models
+
+#### 2.1 Methodology 
+
+The approaches of building and choosing the best regression models for the response variable `TEMP` are
+
+1. Plotting `TEMP` (y-axis) against the `date_time` (x-axis) to identify any patterns of the response variable on the timeline. Although this part is not a part of building regression models, this is a good reference to visually check how future regression models explain `TEMP` on the time scale. 
+2. Building a full model with all of predictor variables. This process will not include variables `No`, `date` & `date_time` 
+3. Checking the model's linear assumptions by checking the model's residuals which are supposed to be  
+  - Normally distributed
+  - Homoscedastic (the same variance at every predictor values)
+  - Independent
+4. If all assumptions are satisfied, then examining
+  - The R-squared: a statistical measure that represents the proportion of the variance for the response variable `TEMP` that's explained by predictor variables in the regression model. The higher the value is, the better the model will be. 
+  - The model's p-value: the F statistic hypothesis testing of the "fit of the intercept-only model". It is supposed to be less than the significance level (usually 0.05). Then the model fits the data well 
+  - Akaike's An Information Criterion (AIC):  a statistical measure to compare between models. The models, which are having the lower AIC, are better than models with higher AICs 
+  - The coefficients' (predictor variables') p-values: a predictor variable that has a low p-value is likely to be a meaningful addition to the model because changes in the predictor's value are related to changes in the response variable. 
+5. Plotting and overlaying the model's predicted `TEMP` on the original plot (Step 1) of the actual `TEMP` and `date_time` to visually check how well the model simulates the response variable.
+6. After that, carrying out the backward elimination or removing necessary predictor variables having the largest p-values to build a new model. Then, repeating again from Step 3. 
+
+
+#### 2.2 Actual TEMP vs Time
+
+```{r}
+plot(df$date_time, df$TEMP, type = 'l', ylim = c(-20,50),
+     main = 'Temperature and Time plot',
+     xlab = 'year',
+     ylab = 'Temperature (oC)')
+a <- lm(df$TEMP ~ df$date_time)
+abline(a, col = 'red')
+legend('topright', legend=c("Actual TEMP", 'The trend line'),
+       col=c("black", 'red'), lty=1, cex=0.8)
+```
+
+The plot indicates that there is a clear seasonal pattern of the temperature. The temperature increases to its peaks around in the mid-years. It reaches to the bottoms around the begining of each year. Besides, there is a tiny increase in the temperature in passing years as the red line reflects that trend. Therefore, there is a need of regression models reflecting effectively the seasonality as well as the trend. 
+<br/>
+<br/>
+<br/>
+<br/>
+
+#### 2.3 Building Regression Models
+
+<br/>
+<br/>
+**a. Model 1 - Full model** 
+<br/>
+<br/>
+The `model1` is built from all other available predictor variables including 1) `year`, 2) `month`, 3) `day`, 4) `hour`, 5) `pm2.5`, 6) `DEWP`, 7) `PRES`, 8) `Iws`, 9) `Is`, 10) `Ir`, 11) `SW`, 12) `NE`, 13) `NW` & 14) `SE`
+
+```{r}
+model1 <- lm(TEMP ~. - No - date - date_time, data = df)
+par(mfrow=c(1,2))
+plot(model1, 1)
+plot(model1, 2)
+```
+
+From the residuals plots, there are two conclusions. 1) There is no clear pattern of the residuals. 2) The residuals have a normal distribution. Therefore, it satisfies the linear regression's assumptions 
+
+
+```{r}
+summary(model1)
+```
+
+
+```{r}
+AIC(model1)
+```
+
+The model performs well with all the metrics, i.e. R-squared, model's p-value, predictor variables' p-value. However, the variable `SE` seems not to be a good fit in this model. Therefore, this variable will be removed to have a new model, i.e. model2. For the AIC value, this will used to compare with other models in the subsequent steps. 
+
+
+```{r}
+par(mfrow=c(1,1))
+pred1 <- predict(model1)
+plot(df$date_time, df$TEMP, type = 'l' , ylim = c(-20,50), 
+     main = 'Temperature and Time plot (Model 1)',
+     xlab = 'year',
+     ylab = 'Temperature (oC)')
+lines(df$date_time, pred1, type = 'l', col = 'pink')
+legend('topright', legend=c("Actual TEMP", "Predicted TEMP"),
+       col=c("black", "pink"), lty=1, cex=0.8)
+```
+
+The `model1` generates fair predicted values which mostly overlay on the actual ones. It might indicate a sign of a good model. However, further investigations are needed to have a firm conclusion on which regression models are performing sufficiently. 
+<br/>
+<br/>
+<br/>
+<br/>
+**b. Model 2** 
+<br/>
+<br/>
+The `model2` is built from predictor variables including 1) `year`, 2) `month`, 3) `day`, 4) `hour`, 5) `pm2.5`, 6) `DEWP`, 7) `PRES`, 8) `Iws`, 9) `Is`, 10) `Ir`, 11) `SW`, 12) `NE` & 13) `NW`
+
+```{r}
+model2 <- lm(TEMP ~. -SE - No - date - date_time, data = df)
+par(mfrow=c(1,2))
+plot(model2, 1)
+plot(model2, 2)
+```
+
+From the residuals plots, there are two conclusions. 1) There is no clear pattern of the residuals. 2) The residuals have a normal distribution. Therefore, it satisfies the linear regression's assumptions.
+
+
+```{r}
+summary(model2)
+```
+
+```{r}
+AIC(model2)
+```
+
+The `model2` performs well with all the metrics, i.e. R-squared, model's p-value, predictor variables' p-value. Since all of the coeffcients have very small p-values, it might not need to remove any additional predictor variable from the model. However, considering the coefficient with the biggest p-value, it is the intercept. The model building is an experimental process. Therefore, to have a better understanding and decision on which model is the best one, for the next model, i.e. `model3`, the intercept will be removed.  
+
+```{r}
+pred2 <- predict(model2)
+plot(df$date_time, df$TEMP, type = 'l' , ylim = c(-20,50), 
+     main = 'Temperature and Time plot (Model 2)',
+     xlab = 'year',
+     ylab = 'Temperature (oC)')
+lines(df$date_time, pred2, type = 'l', col = 'tan')
+legend('topright', legend=c("Actual TEMP", "Predicted TEMP"),
+       col=c("black", "tan"), lty=1, cex=0.8)
+```
+
+The `model2` generates fair predicted values which mostly overlay on the actual ones. It might indicate a sign of a good model. However, further investigations are needed to have a firm conclusion on which regression models are performing sufficiently. 
+<br/>
+<br/>
+<br/>
+<br/>
+**c. Model 3** 
+<br/>
+<br/>
+The `model3` is built from predictor variables including 1) `year`, 2) `month`, 3) `day`, 4) `hour`, 5) `pm2.5`, 6) `DEWP`, 7) `PRES`, 8) `Iws`, 9) `Is`, 10) `Ir`, 11) `SW`, 12) `NE` & 13) `NW` **(No Intercept)**
+
+```{r}
+model3 <- lm(TEMP ~. -SE - No - date - date_time -1, data = df)
+par(mfrow=c(1,2))
+plot(model3, 1)
+plot(model3, 2)
+```
+
+From the residuals plots, there are two conclusions. 1) There is no clear pattern of the residuals. 2) The residuals have a normal distribution. Therefore, it satisfies the linear regression's assumptions.
+
+```{r}
+summary(model3)
+```
+
+```{r}
+AIC(model3)
+```
+
+The `model3` performs well with all the metrics, i.e. R-squared, model's p-value, predictor variables' p-value. Noticeably, the R-squared metric is significantly improved to 0.9192. For all of the coefficients, they are quite small and close to zero. 
+
+```{r}
+pred3 <- predict(model3)
+plot(df$date_time, df$TEMP, type = 'l' , ylim = c(-20,50), 
+     main = 'Temperature and Time plot (Model 3)',
+     xlab = 'year',
+     ylab = 'Temperature (oC)')
+lines(df$date_time, pred3, type = 'l', col = 'blue')
+legend('topright', legend=c("Actual TEMP", "Predicted TEMP"),
+       col=c("black", "blue"), lty=1, cex=0.8)
+```
+
+The `model3` mostly covers all of the actual values of the temperature. 
+<br/>
+<br/>
+<br/>
+<br/>
+**d. Other regression models and the choice of the best one** 
+<br/>
+<br/>
+```{r}
+# summary of model1, model2 & model3
+AIC <- c(AIC(model1), AIC(model2), AIC(model3))
+R_Squared <- c(summary(model1)$r.squared, summary(model2)$r.squared, summary(model3)$r.squared)
+com <- cbind(AIC, R_Squared)
+rownames(com) <- c('model1', 'model2', 'model3')
+com
+```
+
+When removing extra predictor variables, the regression models' performances are worsened. Therefore, the focus of choosing the best model is on the three models being tested. According the AIC $ R_Square metrics, although the `model3`'s AIC is slightly bigger than the `model1` & `model2`, the `model3`'s R_squared value is impressively better than the other two models. The `model3` can explain the variation of the real/actual values of temperature up to 92%. Thus, the best model or the chosen one is the `model3`. This one will be used to predict the future tempeturature in the subsequent years by using Monte Carlo simulation method in the next section. 
+
+<br/>
+<br/>
+<br/> 
+
+### 3. Future prediction with Monte Carlo Simulation
+
+<br/>
+<br/>
+
+#### 3.1 Understanding MC Simulation & Choosing Simulation Method
+
+The Monte Carlo Simulation is based on the law of the large numbers - Bernoulli's Law. It means that the result of performing the same experiment a large number of times. According to the law, the average of the results obtained from a large number of trials should be close to the expected value, and will tend to become closer to the expected value as more trials are performed^[Dekking, F. M. 2005. A modern introduction to probability and statistics: understanding why and how. New York: Springer]. It indicates that the number of iterations in the MC simulation should be large enough to simulate the distribution of the investigated values. Subsequently, MC simulation will provide a confidence interval or a range that is likely to contain the unknow values laying within that range. Accordingly, MC simulation are not a statement of what will happen but what might happen in a defined range or a confidence interval given specific data assumptions^[Whiteside, J. 2008. A Practical Application of Monte Carlo Simulation in Forecasting. US: AACE INTERNATIONAL TRANSACTIONS]
+<br/>
+<br/>
+To predict the future temperature in the subsequent years, MC simulation is employed to simulate the existing data to produce confidence intervals that is likely to contain the future temperature values. In this setting, predicting temperature for each month in a year is a sensible choice which adequately reflects the seasonality and clear fluctuations in temperature. To achieve that end, firstly, examining the error terms of the `model3` is needed. 
+```{r}
+res <- model3$residuals
+hist(res, xlim = c(-20,20), main = 'Histogram of the residuals', xlab = 'residual value')
+abline(v = mean(res), col = 'red')
+```
+
+```{r}
+summary(res)
+```
+
+To simulate the error terms in the regression `model3`, the function below will be used in the next step
+
+```{r}
+# the simulated error terms
+# rnorm(length(pred3), 0, sd(res))
+hist(rnorm(length(pred3), 0, sd(res)), main = 'Histogram of simulated residuals', xlab = 'simulated residuals')
+abline(v = mean(rnorm(length(pred3), 0, sd(res))), col = 'red')
+```
+
+
+#### 3.2 Simulating 
+<br/>
+Now creating a matrix `n` of (1000 x 43824), this matrix will contain all of the predicted values being simulated 1000 times. 
+```{r}
+# number of simulations
+nBoots = 1000
+# creating an emtry matrix whose dimension is (1000 x 43824)
+n = matrix(NA, nBoots, length(pred3))
+for(i in 1:nBoots){
+  n[i,] <- pred3 + rnorm(length(pred3), 0, sd(res))
+}
+```
+
+Calculating the confidence interval for the simulated predicted values in the range of from 2.5% to 97.5%. That interval contains 95% chance of all possible values of temperature. 
+```{r}
+n.stats = apply(n,2,quantile,c(0.025,0.5,0.975))
+```
+
+Visualising the confidence interval with the predicted values
+```{r}
+plot(df$date_time, n.stats[1,], type = 'l' , col = 'mediumpurple2', ylim = c(-45,65), 
+     main = 'Simulated Confidence Interval with Predicted Values (Model 3)',
+     xlab = 'year',
+     ylab = 'Temperature (oC)')
+lines(df$date_time, n.stats[3,], type = 'l', col = 'indianred1')
+lines(df$date_time, pred3, type = 'l', col = 'blue')
+legend('topright', legend=c("95% CI Upper Limit", "95% CI Lower Limit", 'Predicted TEMP'),
+       col=c("indianred1", "mediumpurple2", 'blue'), lty=1, cex=0.8)
+```
+
+Visualising the confidence interval with the actual values
+```{r}
+plot(df$date_time, n.stats[1,], type = 'l' , col = 'mediumpurple2', ylim = c(-45,65), 
+     main = 'Simulated Confidence Interval with Actual values of Temperature',
+     xlab = 'year',
+     ylab = 'Temperature (oC)')
+lines(df$date_time, n.stats[3,], type = 'l', col = 'indianred1')
+lines(df$date_time, df$TEMP, type = 'l', col = 'black')
+legend('topright', legend=c("95% CI Upper Limit", "95% CI Lower Limit", 'Actual TEMP'),
+       col=c("indianred1", "mediumpurple2", 'black'), lty=1, cex=0.8)
+```
+
+
+This simulation of confidence intervals covers well the actual data of the temperature. For the next steps, the simulated predicted values are used investigate the distribution of each month's temperature. 
+
+<br/>
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+month1 <- filter(df, month == 1)$No
+month2 <- filter(df, month == 2)$No
+month3 <- filter(df, month == 3)$No
+month4 <- filter(df, month == 4)$No
+month5 <- filter(df, month == 5)$No
+month6 <- filter(df, month == 6)$No
+month7 <- filter(df, month == 7)$No
+month8 <- filter(df, month == 8)$No
+month9 <- filter(df, month == 9)$No
+month10 <- filter(df, month == 10)$No
+month11 <- filter(df, month == 11)$No
+month12 <- filter(df, month == 12)$No
+```
+
+```{r}
+plot(density(n[,month1]), col = 'blue4', xlim = c(-30,60), ylim = c(0, 0.08), main = 'Density plots of temperature distribution in each month', xlab = 'Temperature (oC)')
+lines(density(n[,month2]), col = 'cornflowerblue')
+lines(density(n[,month3]), col = 'cadetblue3')
+lines(density(n[,month4]), col = 'chartreuse3')
+lines(density(n[,month5]), col = 'darkgoldenrod1')
+lines(density(n[,month6]), col = 'darkorange2')
+lines(density(n[,month7]), col = 'red')
+lines(density(n[,month8]), col = 'tan3')
+lines(density(n[,month9]), col = 'lightgoldenrod1')
+lines(density(n[,month10]), col = 'slateblue1')
+lines(density(n[,month11]), col = 'purple3')
+lines(density(n[,month12]), col = 'blue')
+legend('topright', legend=c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'), col=c('blue4', 'cornflowerblue', 'cadetblue3', 'chartreuse3', 'darkgoldenrod', 'darkorange2', 'red', 'tan3', 'lightgoldenrod1', 'slateblue1', 'purple3', 'blue'), lty=1, cex=0.8)
+
+```
+
+
+```{r}
+# summary of month
+m1 <- summary(as.vector(n[,month1]))
+m2 <- summary(as.vector(n[,month2]))
+m3 <- summary(as.vector(n[,month3]))
+m4 <- summary(as.vector(n[,month4]))
+m5 <- summary(as.vector(n[,month5]))
+m6 <- summary(as.vector(n[,month6]))
+m7 <- summary(as.vector(n[,month7]))
+m8 <- summary(as.vector(n[,month8]))
+m9 <- summary(as.vector(n[,month9]))
+m10 <- summary(as.vector(n[,month10]))
+m11 <- summary(as.vector(n[,month11]))
+m12 <- summary(as.vector(n[,month12]))
+
+min <- c(m1[1], m2[1], m3[1], m4[1], m5[1], m6[1], m7[1], m8[1], m9[1], m10[1], m11[1], m12[1])
+fst_quan <- c(m1[2], m2[2], m3[2], m4[2], m5[2], m6[2], m7[2], m8[2], m9[2], m10[2], m11[2], m12[2])
+median <- c(m1[3], m2[3], m3[3], m4[3], m5[3], m6[3], m7[3], m8[3], m9[3], m10[3], m11[3], m12[3])
+mean <- c(m1[4], m2[4], m3[4], m4[4], m5[4], m6[4], m7[4], m8[4], m9[4], m10[4], m11[4], m12[4])
+thd_quan <- c(m1[5], m2[5], m3[5], m4[5], m5[5], m6[5], m7[5], m8[5], m9[5], m10[5], m11[5], m12[5])
+max <- c(m1[6], m2[6], m3[6], m4[6], m5[6], m6[6], m7[6], m8[6], m9[6], m10[6], m11[6], m12[6])
+
+lower2.5 <- c(quantile(as.vector(n[,month1]), 0.025),
+                     quantile(as.vector(n[,month2]), 0.025),
+                     quantile(as.vector(n[,month3]), 0.025),
+                     quantile(as.vector(n[,month4]), 0.025),
+                     quantile(as.vector(n[,month5]), 0.025),
+                     quantile(as.vector(n[,month6]), 0.025),
+                     quantile(as.vector(n[,month7]), 0.025),
+                     quantile(as.vector(n[,month8]), 0.025),
+                     quantile(as.vector(n[,month9]), 0.025),
+                     quantile(as.vector(n[,month10]), 0.025),
+                     quantile(as.vector(n[,month11]), 0.025),
+                     quantile(as.vector(n[,month12]), 0.025))
+
+upper97.5 <- c(quantile(as.vector(n[,month1]), 0.975),
+                     quantile(as.vector(n[,month2]), 0.975),
+                     quantile(as.vector(n[,month3]), 0.975),
+                     quantile(as.vector(n[,month4]), 0.975),
+                     quantile(as.vector(n[,month5]), 0.975),
+                     quantile(as.vector(n[,month6]), 0.975),
+                     quantile(as.vector(n[,month7]), 0.975),
+                     quantile(as.vector(n[,month8]), 0.975),
+                     quantile(as.vector(n[,month9]), 0.975),
+                     quantile(as.vector(n[,month10]), 0.975),
+                     quantile(as.vector(n[,month11]), 0.975),
+                     quantile(as.vector(n[,month12]), 0.975))
+
+
+month_sum <- cbind(min, lower2.5, fst_quan, median, mean, thd_quan, upper97.5, max)
+rownames(month_sum) <- c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+round(month_sum,digits = 3)
+
+
+```
+
+The summary of predicted temperature is shown above. In a short-term, this could be a solid reference for the future predictions or, to be more precise, the confidence interval range of the temperature in the subsequent years. However, for a long-run, this would be no longer valid since the simulation might not capture well the tendency of the temperature increase which is vividly shown in *Temperature and Time Plot* above.
+
+<br/>
+<br/>
+<br/>
+
+### 4. F Test
+
+#### 4.1 Calculating the F-statistic 
+
+Firstly, two models are built. They are `reduced` and `full` regression models. The `reduced` model has the `PRES` as the predictor variable explaining the response variable `TEMP`. Meanwhile, the `full` model has two predictor variables including `PRES` and `Iws` for the response variable `TEMP`. The F-statistic has the formula as follows
+
+
+$$F = \frac{(SS1 - SS2)/SS2}{(DF1 - DF2)/DF2} $$
+
+Based on the formula, all of values `SS1`, `SS2`, `DF1` & `DF2` are calculated below. The final result is the `F_score`. The result will reveal which regression model is preferable. Additionally, the F-statistic together with p-value could be understood as the hypothesis testing as below.
+$$Ho: The\;simpler\;model \;is \;correct $$
+$$Ha: The\;complicated\;model \;is \;correct $$
+```{r}
+# building models
+reduced <- lm(TEMP ~ PRES, data = df)
+full <- lm(TEMP ~ PRES + Iws, data = df)
+
+# getting predictions
+pred_reduced <- predict(reduced)
+pred_full <- predict(full)
+
+# getting residuals for both models
+resi_reduced <- reduced$residuals
+resi_full <- full$residuals
+
+# sums of squared residuals for both models 
+SS1 <- sum(resi_reduced^2)
+SS2 <- sum(resi_full^2)
+
+# getting degree of freedom for both models
+DF1 <- reduced$df.residual
+DF2 <- full$df.residual
+
+# calculating F score 
+F_score = ((SS1 - SS2) / SS2) / ((DF1 - DF2) / DF2)
+F_score
+
+```
+
+Based on given information regarding F-statistic, the `F_score` seems to be low in comparison with the given threshold of F statistic at the value of 1. This value could indicate that the simpler model `reduced` might be better than the complicated one `full`. However, there is not enough evidence to make such conclusion without a concrete evidence from p_value. Therefore, simulating F_statistic to get the p_value and well as the stastistic's distribution are needed.
+<br/>
+<br/>
+<br/>
+
+#### 4.2 Simulating the F-statistic 
+
+<br/>
+<br/>
+To implement the simulation, there are few conditions to make such simulation valid
+
+1. The two models should be built from the same `TEMP` data in each iteration. 
+2. The simulated `TEMP` data is sampled with replacement from the original one. 
+
+```{r}
+# number of iterations
+nSim = 5000
+# creating an empty simulated F-statistic
+simF <- c()
+# implementing the simulation. NB. This takes few seconds to complete
+for(i in 1:nSim){
+  # simulating new TEMP data by sampling with replacement from the orginal one
+  y_sim <- sample(df$TEMP, replace = T)
+  
+  # building regressions from simulating data
+  sim_model_reduced <- lm(y_sim ~ df$PRES)
+  sim_model_full <- lm(y_sim ~ df$PRES + df$Iws)
+  
+  # getting residuals from the regresion models
+  sim_model_reduced_resi <- sim_model_reduced$residuals
+  sim_model_full_resi <- sim_model_full$residuals
+  
+  # getting sum of squared errors of the two models
+  sim_SS1 <- sum(sim_model_reduced_resi^2)
+  sim_SS2 <- sum(sim_model_full_resi^2)
+  
+  # calculating F score for each of simulation
+  simF <- c(simF, ((sim_SS1 - sim_SS2) / sim_SS2) / ((DF1 - DF2) / DF2)) 
+}
+```
+
+plotting the simulation
+
+```{r}
+
+plot(density(simF), xlim = c(0,9), ylim = c(0,1.1), xlab = 'F_score', main = 'F-statistic Distribution')
+polygon(c( density(simF)$x[density(simF)$x>=F_score], F_score),  
+        c(density(simF)$y[density(simF)$x>=F_score],0 ), col="tan")
+abline(v = F_score, col = 'grey2', lty =2)
+legend('topright', legend = c('The calcuated F_score (0.2778)', 'p_value region'),
+       col = c('grey2', 'tan'), lty = c(2, NA), pch = c(NA, 19), cex = 0.9)
+
+```
+
+calculating the p-value
+
+```{r}
+# p-value
+# calucalting the cumulative distribution
+cumF <- ecdf(simF)
+# calculating the p_value
+p_value <- 1 - cumF(F_score)
+p_value
+```
+
+Based on the calculated p_value and the F_score, there is not enough evidence to reject the Null Hypothesis which means the simpler model is better.
+<br/>
+<br/>
+
+Establishing the critical region to reject the null hypothesis
+```{r}
+criticalF <- quantile(simF,0.95)
+criticalF
+```
+
+visualising the critical region
+```{r}
+plot(density(simF), xlim = c(0,9), ylim = c(0,1.1), xlab = 'F_score', main = 'F-statistic Distribution')
+polygon(c( density(simF)$x[density(simF)$x>=criticalF], criticalF),  
+        c(density(simF)$y[density(simF)$x>=criticalF],0 ), col="red")
+abline(v = criticalF, col = 'grey2', lty =2)
+legend('topright', legend = paste('The critical region - F_score = ',round(criticalF, digits = 4)),
+       col = c('red'), pch = c(19), cex = 0.9)
+```
+
+Based on the calculated critical region, the Null Hypothesis will be rejected if the F_score or F-statistic is greater than the visualised value above. Because the p_value for such scenario will be smaller than 5% which is the significance level of the hypothesis testing. 
+
+#### 4.3 Validating the results
+
+The results above could be easily derived from a function below
+```{r}
+anova(reduced, full)
+```
+
+Both F_score and p_value are closely similar the calculations from the simulation above 
+<br/>
+<br/>
+The distribution of the F-statistic with the given degrees of freedom could be easily visualised by the functions below. In this case, the degrees of freedom in the numerator and denominator are 1 and 43821 respectively. 
+```{r}
+
+plot(density(rf(nrow(df), df1 = 1, df2 = 43821)), main = 'F-statistic distribution with Degrees of Freedom 1 & 43.821', xlab='F_score')
+
+```
+
+The critical value is also conveniently calculated
+```{r}
+crit <- qf(0.95, df1= 1, df2 = 43821) 
+crit
+```
+
+
